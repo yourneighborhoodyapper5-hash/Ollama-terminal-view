@@ -42,7 +42,7 @@
   <script>
     const screen=document.querySelector('#screen'), input=document.querySelector('#command-input'), form=document.querySelector('#command-form'), statusDot=document.querySelector('#status-dot'), statusText=document.querySelector('#status-text');
     let settingsBox=document.querySelector('#settings');
-    const apiBase=window.OLLAMA_PROXY_URL||'https://ollama.com/api', storageKey='ollama-terminal-settings';
+    const apibase=https:"//ollama-pages-proxy.iboxone94.workers.dev', storageKey='ollama-terminal-settings';
     const state={key:'',model:'',history:[],historyIndex:-1,models:[],messages:[],busy:false};
     try { Object.assign(state,JSON.parse(localStorage.getItem(storageKey)||'{}')); } catch (_) {}
     function save(){localStorage.setItem(storageKey,JSON.stringify({key:state.key,model:state.model}));}
