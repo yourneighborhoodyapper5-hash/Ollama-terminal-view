@@ -40,26 +40,180 @@
     </section>
   </main>
   <script>
-    const screen=document.querySelector('#screen'), input=document.querySelector('#command-input'), form=document.querySelector('#command-form'), statusDot=document.querySelector('#status-dot'), statusText=document.querySelector('#status-text');
-    let settingsBox=document.querySelector('#settings');
-    const apiBase=window.OLLAMA_PROXY_URL||'https://ollama.com/api', storageKey='ollama-terminal-settings';
-    const state={key:'',model:'',history:[],historyIndex:-1,models:[],messages:[],busy:false};
-    try { Object.assign(state,JSON.parse(localStorage.getItem(storageKey)||'{}')); } catch (_) {}
-    function save(){localStorage.setItem(storageKey,JSON.stringify({key:state.key,model:state.model}));}
-    function print(text,className='output'){const item=document.createElement('div');item.className=`line ${className}`;item.textContent=text;screen.appendChild(item);screen.scrollTop=screen.scrollHeight;return item;}
-    function echo(text){print(`guest@ollama:~$ ${text}`,'prompt');} function setStatus(text,type=''){statusText.textContent=text;statusDot.className=`dot ${type}`;}
-    function escapeHtml(value){return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));}
-    function renderSettings(){const safeKey=state.key?`${state.key.slice(0,4)}${'*'.repeat(Math.max(4,state.key.length-4))}`:'not set';settingsBox.innerHTML=`<div class="setting"><label>service</label><value>ollama cloud /api</value></div><div class="setting"><label>model</label><value>${escapeHtml(state.model||'auto')}</value></div><div class="setting"><label>api key</label><value>${escapeHtml(safeKey)}</value></div>`;}
-    function headers(){return state.key?{Authorization:`Bearer ${state.key}`}:{}} function endpoint(path){return `${apiBase}${path}`;}
-    async function request(path,options={}){const requestHeaders={...headers(),...(options.headers||{})};if(options.body)requestHeaders['Content-Type']='application/json';let response;try{response=await fetch(endpoint(path),{...options,headers:requestHeaders});}catch(error){if(error instanceof TypeError)throw new Error('browser blocked the request (CORS). GitHub Pages needs a small serverless proxy to read Ollama Cloud.');throw error;}if(!response.ok)throw new Error(`${response.status} ${response.statusText}${response.status===401?' - check your API key':''}`);return response;}
-    async function listModels(){print('querying /api/tags ...','muted');setStatus('scanning models');try{const data=await(await request('/tags')).json();state.models=data.models||[];setStatus(`${state.models.length} model${state.models.length===1?'':'s'} detected`,'ready');if(!state.models.length)return print('no models returned by this endpoint','amber');const table=document.createElement('table');table.className='model-table';table.innerHTML='<thead><tr><th>model</th><th>size</th><th>modified</th><th></th></tr></thead><tbody></tbody>';state.models.forEach(model=>{const row=document.createElement('tr');const name=model.name||model.model||'unknown';if(name===state.model)row.className='selected';const size=model.size?`${(model.size/1073741824).toFixed(1)} GB`:'-';const date=model.modified_at?new Date(model.modified_at).toLocaleDateString():'-';row.innerHTML=`<td>${escapeHtml(name)}</td><td>${size}</td><td>${date}</td><td><button class="action" data-model="${escapeHtml(name)}">use</button></td>`;table.querySelector('tbody').appendChild(row);});screen.appendChild(table);table.addEventListener('click',event=>{const button=event.target.closest('[data-model]');if(!button)return;state.model=button.dataset.model;save();renderSettings();print(`model set to ${state.model}`,'green');});screen.scrollTop=screen.scrollHeight;}catch(error){setStatus('connection error','error');print(`error: ${error.message}`,'error');}}
-    async function stream(path,body,mode){const response=await request(path,{method:'POST',body:JSON.stringify({...body,stream:true})});const reader=response.body.getReader(),decoder=new TextDecoder();const output=document.createElement('div');output.className='line output';screen.appendChild(output);let pending='',result='';while(true){const {value,done}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});const chunks=pending.split('\n');pending=chunks.pop();chunks.filter(Boolean).forEach(chunk=>{try{const data=JSON.parse(chunk);const text=mode==='chat'?data.message?.content:data.response;if(text){result+=text;output.textContent+=text;screen.scrollTop=screen.scrollHeight;}}catch(_){}});}return result;}
-    async function chat(message){if(!state.model){print('no model selected. Run `list`, then `use <model>`.','amber');return;}setStatus(`chatting with ${state.model}`,'ready');state.messages.push({role:'user',content:message});try{const response=await stream('/chat',{model:state.model,messages:state.messages},'chat');state.messages.push({role:'assistant',content:response});}catch(error){state.messages.pop();throw error;}setStatus('cloud api ready','ready');}
-    async function generate(prompt){if(!state.model)return print('no model selected. Run `list`, then `use <model>`.','amber');setStatus(`generating with ${state.model}`,'ready');await stream('/generate',{model:state.model,prompt},'generate');setStatus('cloud api ready','ready');}
-    async function utility(path,body){setStatus(path.slice(1),'ready');const data=await(await request(path,{method:'POST',body:JSON.stringify(body)})).json();print(JSON.stringify(data,null,2),'output');setStatus('cloud api ready','ready');}
-    function help(){print('commands:','cyan');print('  help                         show this command list');print('  list | models                GET /api/tags and list cloud models');print('  use <model>                  select a model');print('  chat <message>               send a message with conversation memory');print('  generate <prompt>            POST /api/generate completion');print('  embed <text>                 POST /api/embed vector embedding');print('  web_search <query>           POST /api/web_search');print('  web_fetch <url>              POST /api/web_fetch');print('  set key <api-key>            save your Ollama Cloud key locally');print('  set model <name>             select a model');print('  new                          clear multi-turn chat context');print('  settings | clear | reset    terminal controls');print('plain text is treated as a chat message.');}
-    async function run(raw){const command=raw.trim();if(!command)return;echo(command);const parts=command.split(/\s+/),verb=parts[0].toLowerCase(),value=command.slice(parts[0].length).trim();if(verb==='help'||verb==='?')return help();if(verb==='clear'){screen.innerHTML='';const fresh=document.createElement('div');fresh.className='settings';fresh.id='settings';screen.appendChild(fresh);settingsBox=fresh;renderSettings();return;}if(verb==='list'||verb==='models')return listModels();if(verb==='settings'){renderSettings();return print(`service: ${apiBase}\nmodel: ${state.model||'auto'}\nkey: ${state.key?'configured':'not configured'}`,'output');}if(verb==='reset'){state.key='';state.model='';state.models=[];state.messages=[];save();renderSettings();setStatus('cloud api ready','ready');return print('saved key, model, and chat context reset','amber');}if(verb==='new'){state.messages=[];return print('chat context cleared','cyan');}if(verb==='use'&&value){state.model=value;save();renderSettings();return print(`model set to ${state.model}`,'cyan');}if(verb==='set'&&parts[1]&&parts[2]){if(parts[1]==='key')state.key=parts.slice(2).join(' ');else if(parts[1]==='model')state.model=parts.slice(2).join(' ');else return print(`unknown setting: ${parts[1]}. Endpoint is fixed to Ollama Cloud.`,'error');save();renderSettings();return print(`${parts[1]} updated`,'cyan');}if(state.busy)return print('please wait for the current response','amber');state.busy=true;try{if(verb==='generate')await generate(value);else if(verb==='embed')await utility('/embed',{model:state.model,input:value});else if(verb==='web_search')await utility('/web_search',{query:value});else if(verb==='web_fetch')await utility('/web_fetch',{url:value});else await chat(command.startsWith('chat ')?value:command);}catch(error){setStatus('connection error','error');print(`error: ${error.message}`,'error');}finally{state.busy=false;}}
-    form.addEventListener('submit',event=>{event.preventDefault();const value=input.value;if(value.trim())state.history.unshift(value);state.historyIndex=-1;input.value='';run(value);});input.addEventListener('keydown',event=>{if(event.key==='ArrowUp'&&state.history.length){event.preventDefault();state.historyIndex=Math.min(state.historyIndex+1,state.history.length-1);input.value=state.history[state.historyIndex];}if(event.key==='ArrowDown'&&state.historyIndex>=0){event.preventDefault();state.historyIndex-=1;input.value=state.historyIndex<0?'':state.history[state.historyIndex];}});renderSettings();
+    (function () {
+      'use strict';
+
+      var apiBase = 'https://ollama-pages-proxy.iboxone94.workers.dev';
+      var storageKey = 'ollama-terminal-settings';
+      var screen = document.getElementById('screen');
+      var input = document.getElementById('command-input');
+      var form = document.getElementById('command-form');
+      var statusDot = document.getElementById('status-dot');
+      var statusText = document.getElementById('status-text');
+      var settingsBox = document.getElementById('settings');
+      var state = { key: '', model: '', models: [], messages: [], history: [], historyIndex: -1, busy: false };
+
+      try { Object.assign(state, JSON.parse(localStorage.getItem(storageKey) || '{}')); } catch (ignore) {}
+
+      function save() {
+        try { localStorage.setItem(storageKey, JSON.stringify({ key: state.key, model: state.model })); } catch (ignore) {}
+      }
+
+      function print(text, className) {
+        var item = document.createElement('div');
+        item.className = 'line ' + (className || 'output');
+        item.textContent = text;
+        screen.appendChild(item);
+        screen.scrollTop = screen.scrollHeight;
+        return item;
+      }
+
+      function setStatus(text, type) {
+        statusText.textContent = text;
+        statusDot.className = 'dot ' + (type || '');
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, function (char) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char];
+        });
+      }
+
+      function renderSettings() {
+        var masked = state.key ? state.key.slice(0, 4) + '****' : 'managed by proxy';
+        settingsBox.innerHTML = '<div class="setting"><label>service</label><value>ollama cloud /api</value></div>' +
+          '<div class="setting"><label>model</label><value>' + escapeHtml(state.model || 'choose with list') + '</value></div>' +
+          '<div class="setting"><label>auth</label><value>' + escapeHtml(masked) + '</value></div>';
+      }
+
+      function request(path, options) {
+        var settings = options || {};
+        var headers = settings.headers || {};
+        var controller = window.AbortController ? new AbortController() : null;
+        var timer = controller ? window.setTimeout(function () { controller.abort(); }, 20000) : null;
+        if (state.key) headers.Authorization = 'Bearer ' + state.key;
+        if (settings.body) headers['Content-Type'] = 'application/json';
+        var fetchOptions = { method: settings.method || 'GET', headers: headers, cache: 'no-store' };
+        if (settings.body) fetchOptions.body = settings.body;
+        if (controller) fetchOptions.signal = controller.signal;
+        return fetch(apiBase + path, fetchOptions).then(function (response) {
+          if (timer) window.clearTimeout(timer);
+          if (!response.ok) {
+            return response.text().then(function (body) {
+              var detail = body;
+              try { detail = JSON.parse(body).error || body; } catch (ignore) {}
+              throw new Error('HTTP ' + response.status + ': ' + detail);
+            });
+          }
+          return response;
+        }).catch(function (error) {
+          if (timer) window.clearTimeout(timer);
+          if (error.name === 'AbortError') throw new Error('request timed out after 20 seconds');
+          if (error instanceof TypeError) throw new Error('Safari blocked the proxy request. Open the GitHub Pages URL, not a local file or localhost.');
+          throw error;
+        });
+      }
+
+      function listModels() {
+        print('querying ' + apiBase + '/tags ...', 'muted');
+        setStatus('scanning models');
+        request('/tags').then(function (response) { return response.json(); }).then(function (data) {
+          state.models = data.models || [];
+          setStatus(state.models.length + ' models detected', 'ready');
+          if (!state.models.length) { print('proxy connected, but no models were returned', 'amber'); return; }
+          var table = document.createElement('table');
+          table.className = 'model-table';
+          table.innerHTML = '<thead><tr><th>model</th><th>size</th><th>modified</th><th></th></tr></thead><tbody></tbody>';
+          state.models.forEach(function (model) {
+            var name = model.name || model.model || 'unknown';
+            var row = document.createElement('tr');
+            if (name === state.model) row.className = 'selected';
+            row.innerHTML = '<td>' + escapeHtml(name) + '</td><td>' + (model.size ? (model.size / 1073741824).toFixed(1) + ' GB' : '-') + '</td><td>' + (model.modified_at ? new Date(model.modified_at).toLocaleDateString() : '-') + '</td><td><button class="action" data-model="' + escapeHtml(name) + '">use</button></td>';
+            table.querySelector('tbody').appendChild(row);
+          });
+          screen.appendChild(table);
+          table.addEventListener('click', function (event) {
+            var button = event.target.closest('[data-model]');
+            if (!button) return;
+            state.model = button.getAttribute('data-model');
+            save(); renderSettings(); print('model set to ' + state.model, 'green');
+          });
+        }).catch(function (error) {
+          setStatus('request failed', 'error');
+          print('error: ' + error.message, 'error');
+        });
+      }
+
+      function chat(message) {
+        if (!state.model) { print('select a model first with: list, then use <model>', 'amber'); return Promise.resolve(); }
+        state.messages.push({ role: 'user', content: message });
+        setStatus('chatting with ' + state.model, 'ready');
+        return request('/chat', { method: 'POST', body: JSON.stringify({ model: state.model, messages: state.messages, stream: false }) }).then(function (response) {
+          return response.json();
+        }).then(function (data) {
+          var answer = data.message && data.message.content ? data.message.content : data.response || '';
+          state.messages.push({ role: 'assistant', content: answer });
+          print(answer, 'output');
+          setStatus('cloud api ready', 'ready');
+        }).catch(function (error) {
+          state.messages.pop();
+          throw error;
+        });
+      }
+
+      function utility(path, payload) {
+        setStatus(path.slice(1), 'ready');
+        return request(path, { method: 'POST', body: JSON.stringify(payload) }).then(function (response) {
+          return response.json();
+        }).then(function (data) {
+          print(JSON.stringify(data, null, 2), 'output');
+          setStatus('cloud api ready', 'ready');
+        });
+      }
+
+      function help() {
+        print('commands:', 'cyan');
+        print('  list / models       fetch available models');
+        print('  use <model>         select a model');
+        print('  chat <message>      send a chat message');
+        print('  set key <key>       optional browser key; proxy key is preferred');
+        print('  set model <name>    select a model');
+        print('  new                 clear chat memory');
+        print('  settings / clear / reset');
+      }
+
+      function run(command) {
+        var trimmed = command.trim();
+        if (!trimmed) return;
+        print('guest@ollama:~$ ' + trimmed, 'prompt');
+        var parts = trimmed.split(/\s+/), verb = parts[0].toLowerCase(), value = trimmed.slice(parts[0].length).trim();
+        if (verb === 'help' || verb === '?') return help();
+        if (verb === 'list' || verb === 'models') return listModels();
+        if (verb === 'settings') { renderSettings(); return print('proxy: ' + apiBase + '\nmodel: ' + (state.model || 'none'), 'output'); }
+        if (verb === 'clear') { screen.innerHTML = '<div class="settings" id="settings"></div>'; settingsBox = document.getElementById('settings'); renderSettings(); return; }
+        if (verb === 'new' || verb === 'reset') { state.messages = []; if (verb === 'reset') { state.key = ''; state.model = ''; save(); renderSettings(); } return print('chat context cleared', 'cyan'); }
+        if (verb === 'use' && value) { state.model = value; save(); renderSettings(); return print('model set to ' + value, 'cyan'); }
+        if (verb === 'set' && parts.length > 2) { if (parts[1] === 'key') state.key = parts.slice(2).join(' '); else if (parts[1] === 'model') state.model = parts.slice(2).join(' '); else return print('endpoint is fixed to the Ollama Cloud proxy', 'error'); save(); renderSettings(); return print(parts[1] + ' updated', 'cyan'); }
+        if (state.busy) return print('please wait for the current request', 'amber');
+        state.busy = true;
+        var action;
+        if (verb === 'embed') action = utility('/embed', { model: state.model, input: value });
+        else if (verb === 'web_search') action = utility('/web_search', { query: value });
+        else if (verb === 'web_fetch') action = utility('/web_fetch', { url: value });
+        else action = chat(verb === 'chat' ? value : trimmed);
+        return action.catch(function (error) {
+          setStatus('request failed', 'error');
+          print('error: ' + error.message, 'error');
+        }).then(function () { state.busy = false; });
+      }
+
+      form.addEventListener('submit', function (event) { event.preventDefault(); var value = input.value; input.value = ''; run(value); });
+      input.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowUp' && state.history.length) { event.preventDefault(); state.historyIndex = Math.min(state.historyIndex + 1, state.history.length - 1); input.value = state.history[state.historyIndex]; }
+        if (event.key === 'ArrowDown' && state.historyIndex >= 0) { event.preventDefault(); state.historyIndex -= 1; input.value = state.historyIndex < 0 ? '' : state.history[state.historyIndex]; }
+      });
+      renderSettings();
+    }());
   </script>
 </body>
 </html>
