@@ -93,7 +93,7 @@
         var timer = controller ? window.setTimeout(function () { controller.abort(); }, 20000) : null;
         if (state.key) headers.Authorization = 'Bearer ' + state.key;
         if (settings.body) headers['Content-Type'] = 'application/json';
-        var fetchOptions = { method: settings.method || 'GET', headers: headers, cache: 'no-store' };
+        var fetchOptions = { method: settings.method || 'GET', headers: headers, cache: 'no-store', mode: 'cors', credentials: 'omit' };
         if (settings.body) fetchOptions.body = settings.body;
         if (controller) fetchOptions.signal = controller.signal;
         return fetch(apiBase + path, fetchOptions).then(function (response) {
@@ -117,7 +117,22 @@
       function listModels() {
         print('querying ' + apiBase + '/tags ...', 'muted');
         setStatus('scanning models');
-        request('/tags').then(function (response) { return response.json(); }).then(function (data) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', apiBase + '/tags', true);
+        xhr.timeout = 20000;
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          if (xhr.status < 200 || xhr.status >= 300) {
+            setStatus('request failed', 'error');
+            print('error: proxy returned HTTP ' + xhr.status + '. Check ALLOWED_ORIGIN in Cloudflare.', 'error');
+            return;
+          }
+          var data;
+          try { data = JSON.parse(xhr.responseText); } catch (error) {
+            setStatus('request failed', 'error');
+            print('error: proxy returned invalid JSON', 'error');
+            return;
+          }
           state.models = data.models || [];
           setStatus(state.models.length + ' models detected', 'ready');
           if (!state.models.length) { print('proxy connected, but no models were returned', 'amber'); return; }
@@ -138,10 +153,16 @@
             state.model = button.getAttribute('data-model');
             save(); renderSettings(); print('model set to ' + state.model, 'green');
           });
-        }).catch(function (error) {
+        };
+        xhr.onerror = function () {
           setStatus('request failed', 'error');
-          print('error: ' + error.message, 'error');
-        });
+          print('error: Safari could not open the proxy connection. Check Cloudflare ALLOWED_ORIGIN.', 'error');
+        };
+        xhr.ontimeout = function () {
+          setStatus('request timed out', 'error');
+          print('error: proxy did not respond within 20 seconds', 'error');
+        };
+        xhr.send(null);
       }
 
       function chat(message) {
